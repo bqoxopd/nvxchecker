@@ -4,7 +4,7 @@ from PIL import Image, ImageTk
 import subprocess
 import platform
 import threading
-import time
+import socket
 import os
 import re
 
@@ -14,8 +14,17 @@ AUTO_REFRESH_INTERVAL = 10  # в секундах
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return []
-    with open(CONFIG_FILE, 'r') as f:
-        return [line.strip() for line in f if line.strip()]
+    config = []
+    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            match = re.match(r'^([^\s]+)\s+\(([^)]+)\)$', line)
+            if match:
+                domain, desc = match.groups()
+                config.append((domain, desc))
+    return config
 
 def get_netstat_output():
     try:
@@ -27,12 +36,24 @@ def get_netstat_output():
     except Exception as e:
         return f"Ошибка: {e}"
 
-def check_ips(config_ips, netstat_output):
+def check_dns(domain):
+    try:
+        if platform.system() != 'Windows':
+            return False
+        result = subprocess.run("netsh dns show dnsservers", shell=True, capture_output=True, text=True)
+        socket.gethostbyname(domain)
+        return True
+    except Exception:
+        return False
+
+def check_ips(config_entries, netstat_output):
     matched = []
-    for ip in config_ips:
+    for domain, desc, ip in config_entries:
+        if ip is None:
+            continue
         pattern = re.compile(rf"\b{re.escape(ip)}(:\d+)?\b")
         if pattern.search(netstat_output):
-            matched.append(ip)
+            matched.append((domain, desc, ip))
     return matched
 
 class IPCheckerApp:
@@ -43,16 +64,13 @@ class IPCheckerApp:
         self.root.configure(bg="#121822")
         self.root.resizable(False, False)
 
-        self.style = ttk.Style(self.root)
+        self.style = ttk.Style()
         self.style.theme_use('default')
 
         self.style.configure('TButton',
                              font=('Segoe UI', 13, 'bold'),
                              foreground='#ffffff',
                              background='#1e90ff',
-                             borderwidth=0,
-                             focusthickness=3,
-                             focuscolor='none',
                              padding=12)
         self.style.map('TButton',
                        background=[('active', '#3399ff'), ('pressed', '#0d75d8')],
@@ -72,22 +90,20 @@ class IPCheckerApp:
         self.menu_frame.pack(fill=tk.X)
 
         try:
-            img = Image.open("nvx_logo.png").resize((70, 70), Image.ANTIALIAS)
+            img = Image.open("nvx_logo.png").resize((70, 70), Image.Resampling.LANCZOS)
             self.logo_img = ImageTk.PhotoImage(img)
-            # Для изображения используем tk.Label без style
             logo_label = tk.Label(self.menu_frame, image=self.logo_img, bg="#0a3d62")
             logo_label.pack(side=tk.LEFT, padx=15, pady=5)
         except Exception as e:
             print(f"Логотип не загружен: {e}")
 
-        # Заголовок — ttk.Label с применением стиля
         title_label = ttk.Label(self.menu_frame, text="NVX IP Monitor", style='Header.TLabel')
         title_label.pack(side=tk.LEFT, padx=10, pady=20)
 
         self.btn_check = ttk.Button(self.root, text="Проверить подключения", command=self.start_check_thread)
         self.btn_check.pack(pady=(20, 15), ipadx=15, ipady=8)
 
-        self.output_frame = tk.Frame(self.root, bg="#182a45", bd=0, relief=tk.FLAT)
+        self.output_frame = tk.Frame(self.root, bg="#182a45")
         self.output_frame.pack(padx=20, pady=10, fill=tk.BOTH, expand=True)
 
         self.text_output = tk.Text(self.output_frame,
@@ -97,16 +113,17 @@ class IPCheckerApp:
                                    relief=tk.FLAT,
                                    wrap=tk.WORD,
                                    insertbackground='#00c8ff')
-        self.text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10,0), pady=10)
+        self.text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=10)
 
         self.scrollbar = ttk.Scrollbar(self.output_frame, orient=tk.VERTICAL, command=self.text_output.yview)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0,10), pady=10)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
         self.text_output.config(yscrollcommand=self.scrollbar.set)
 
         self.text_output.tag_configure("intro", foreground="#00c8ff", font=("Consolas", 13, "bold"))
         self.text_output.tag_configure("checking", foreground="#40e0d0")
         self.text_output.tag_configure("found", foreground="#7fff00", font=("Consolas", 12, "bold"))
         self.text_output.tag_configure("notfound", foreground="#ffaa00", font=("Consolas", 12, "bold"))
+        self.text_output.tag_configure("error", foreground="#ff5555", font=("Consolas", 12, "bold"))
 
         self.text_output.config(state=tk.DISABLED)
 
@@ -120,31 +137,60 @@ class IPCheckerApp:
         self.text_output.config(state=tk.DISABLED)
 
     def start_check_thread(self):
-        threading.Thread(target=self.check_ips_gui, daemon=True).start()
+        threading.Thread(target=self.check_all_gui, daemon=True).start()
 
-    def check_ips_gui(self):
+    def check_all_gui(self):
         self.btn_check.state(['disabled'])
         self.text_output.config(state=tk.NORMAL)
-        self.text_output.insert(tk.END, "▶ Проверка IP...\n", "checking")
+        self.text_output.insert(tk.END, "▶ Проверка IP и DNS...\n", "checking")
         self.text_output.see(tk.END)
         self.text_output.config(state=tk.DISABLED)
 
-        config_ips = load_config()
-        if not config_ips:
-            messagebox.showwarning("Внимание", "Файл config.txt пуст или не найден.\nДобавьте IP-адреса в файл.")
+        config_entries = load_config()
+        if not config_entries:
+            messagebox.showwarning("Внимание", "Файл config.txt пуст или не найден.\nДобавьте домены с описаниями.")
             self.btn_check.state(['!disabled'])
             return
 
+        resolved_entries = []
+        for domain, desc in config_entries:
+            try:
+                ip = socket.gethostbyname(domain)
+            except Exception:
+                ip = None
+            resolved_entries.append((domain, desc, ip))
+
         netstat_data = get_netstat_output()
-        matched = check_ips(config_ips, netstat_data)
+
+        results = []
+        for domain, desc, ip in resolved_entries:
+            found_dns = False
+            found_netstat = False
+
+            if ip is not None:
+                found_dns = True
+
+            if ip is not None:
+                pattern = re.compile(rf"\b{re.escape(ip)}(:\d+)?\b")
+                if pattern.search(netstat_data):
+                    found_netstat = True
+
+            if found_dns:
+                results.append((domain, desc, ip, "dns", True))
+            elif found_netstat:
+                results.append((domain, desc, ip, "netstat", True))
+            else:
+                results.append((domain, desc, ip, None, False))
 
         self.text_output.config(state=tk.NORMAL)
         self.text_output.insert(tk.END, "\nРезультаты:\n", "intro")
-        if matched:
-            for ip in matched:
-                self.text_output.insert(tk.END, f"✅ {ip} — НАЙДЕН\n", "found")
-        else:
-            self.text_output.insert(tk.END, "❌ Нет совпадений\n", "notfound")
+        for domain, desc, ip, method, found in results:
+            if found:
+                self.text_output.insert(tk.END, f"✅ {domain} ({desc}) — НАЙДЕН методом: {method}\n", "found")
+            elif ip is None:
+                self.text_output.insert(tk.END, f"❌ {domain} ({desc}) — НЕ НАЙДЕН: не удалось резолвить\n", "error")
+            else:
+                self.text_output.insert(tk.END, f"❌ {domain} ({desc}) — НЕ НАЙДЕН\n", "notfound")
         self.text_output.insert(tk.END, "\n")
         self.text_output.see(tk.END)
         self.text_output.config(state=tk.DISABLED)
@@ -157,9 +203,11 @@ class IPCheckerApp:
 
 def main():
     root = tk.Tk()
-    # Убираем системное меню (перышко) только для Windows
-    if platform.system() == 'Windows':
-        root.attributes('-toolwindow', True)
+    try:
+        root.iconbitmap(default='')
+    except Exception:
+        pass
+    root.attributes('-toolwindow', True)
     app = IPCheckerApp(root)
     root.mainloop()
 
