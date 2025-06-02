@@ -1,8 +1,14 @@
 # nvxchecker
-в config.txt вкидываем ip читов
+в config.txt вкидываем домены читов
 через enter без : и т.д
 типо:
-0.0.0.0
-0.0.0.1
-0.0.0.2
+nursultan.fun (Nursultan client)
+doomsdayclient.com (doomsday client)
+deltaclient.xyz (delta client)
+akrien.wtf  (akrien client)
+cloudmc.dev (cloud client)
+celka.su (celestial client)
+wexside.ru (wexside client)
+drip.gg (drip client)
 жмем поиск.
+В скобках - подпись доменов (выводиться при проверке)
