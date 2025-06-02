@@ -1,7 +1,8 @@
-188.114.98.234
-104.21.80.1
-165.22.196.0
-172.67.187.188
-188.114.98.224
-185.199.111.153
-195.209.81.128
+nursultan.fun (Nursultan client)
+doomsdayclient.com (doomsday client)
+deltaclient.xyz (delta client)
+akrien.wtf  (akrien client)
+cloudmc.dev (cloud client)
+celka.su (celestial client)
+wexside.ru (wexside client)
+drip.gg (drip client)
